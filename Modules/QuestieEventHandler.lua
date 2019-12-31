@@ -1,12 +1,35 @@
-local function _Hack_prime_log() -- this seems to make it update the data much quicker
-  for i=1,GetNumQuestLogEntries()+1 do
-    GetQuestLogTitle(i)
-    QuestieQuest:GetRawLeaderBoardDetails(i)
-  end
-end
-
 --- GLOBAL ---
-QuestieEventHandler = {}
+---@class QuestieEventHandler
+local QuestieEventHandler = QuestieLoader:CreateModule("QuestieEventHandler");
+
+-------------------------
+--Import modules.
+-------------------------
+---@type QuestieQuest
+local QuestieQuest = QuestieLoader:ImportModule("QuestieQuest");
+---@type QuestieJourney
+local QuestieJourney = QuestieLoader:ImportModule("QuestieJourney");
+---@type QuestieComms
+local QuestieComms = QuestieLoader:ImportModule("QuestieComms");
+---@type QuestieProfessions
+local QuestieProfessions = QuestieLoader:ImportModule("QuestieProfessions");
+---@type QuestieTracker
+local QuestieTracker = QuestieLoader:ImportModule("QuestieTracker");
+---@type QuestieReputation
+local QuestieReputation = QuestieLoader:ImportModule("QuestieReputation");
+---@type QuestieNameplate
+local QuestieNameplate = QuestieLoader:ImportModule("QuestieNameplate");
+---@type QuestieMap
+local QuestieMap = QuestieLoader:ImportModule("QuestieMap");
+---@type QuestieLib
+local QuestieLib = QuestieLoader:ImportModule("QuestieLib");
+---@type QuestieHash
+local QuestieHash = QuestieLoader:ImportModule("QuestieHash");
+---@type QuestiePlayer
+local QuestiePlayer = QuestieLoader:ImportModule("QuestiePlayer");
+---@type QuestieDB
+local QuestieDB = QuestieLoader:ImportModule("QuestieDB");
+
 __UPDATEFIX_IDX = 1; -- temporary bad fix
 
 --- LOCAL ---
@@ -15,9 +38,18 @@ local playerEntered = false;
 local hasFirstQLU = false;
 local runQLU = false
 
+
+local function _Hack_prime_log() -- this seems to make it update the data much quicker
+  for i=1, GetNumQuestLogEntries()+1 do
+    GetQuestLogTitle(i)
+    QuestieQuest:GetRawLeaderBoardDetails(i)
+  end
+end
+
 function QuestieEventHandler:PLAYER_LOGIN()
     C_Timer.After(1, function()
         QuestieDB:Initialize()
+        QuestieLib:CacheAllItemNames();
     end)
     C_Timer.After(4, function()
         -- We want the framerate to be HIGH!!!
@@ -41,10 +73,29 @@ end
 --Fires when a quest is accepted in anyway.
 function QuestieEventHandler:QUEST_ACCEPTED(questLogIndex, questId)
     Questie:Debug(DEBUG_DEVELOP, "EVENT: QUEST_ACCEPTED", "QLogIndex: "..questLogIndex,  "QuestID: "..questId);
+    --Try and cache all the potential items required for the quest.
+    QuestieLib:CacheItemNames(questId)
     _Hack_prime_log()
+    local timer = nil;
+    timer = C_Timer.NewTicker(0.5, function()
+        if(QuestieLib:IsResponseCorrect(questId)) then
+            QuestieQuest:AcceptQuest(questId)
+            QuestieJourney:AcceptQuest(questId)
+            timer:Cancel();
+            Questie:Debug(DEBUG_DEVELOP, "Accept seems correct, cancel timer");
+        else
+            Questie:Debug(DEBUG_CRITICAL, "Response is wrong for quest, waiting with timer");
+        end
+    end)
 
-    QuestieQuest:AcceptQuest(questId)
-    QuestieJourney:AcceptQuest(questId)
+end
+
+--Fires on MAP_EXPLORATION_UPDATED.
+function QuestieEventHandler:MAP_EXPLORATION_UPDATED()
+    Questie:Debug(DEBUG_DEVELOP, "EVENT: MAP_EXPLORATION_UPDATED");
+    if Questie.db.global.hideUnexploredMapIcons then
+        QuestieMap.utils:MapExplorationUpdate();
+    end
 end
 
 -- Needed to distinguish finished quests from abandoned quests
@@ -57,13 +108,37 @@ function QuestieEventHandler:QUEST_REMOVED(questID)
     _Hack_prime_log()
     if finishedEventReceived == questID then
         finishedEventReceived = false
-        runQLU = true
-        QuestieQuest:CompleteQuest(questID)
-        QuestieJourney:CompleteQuest(questID)
+        runQLU = false
+        QuestieEventHandler:CompleteQuest(questID);
+        --Broadcast our removal!
+        Questie:SendMessage("QC_ID_BROADCAST_QUEST_REMOVE", questID);
         return
     end
     QuestieQuest:AbandonedQuest(questID)
     QuestieJourney:AbandonQuest(questID)
+    runQLU = false
+
+    --Broadcast our removal!
+    Questie:SendMessage("QC_ID_BROADCAST_QUEST_REMOVE", questID);
+end
+
+function QuestieEventHandler:CompleteQuest(questId, count)
+    if(not count) then
+        count = 1;
+    end
+    local quest = QuestieDB:GetQuest(questId);
+    if not quest then
+        return
+    end
+    if(IsQuestFlaggedCompleted(questId) or quest.Repeatable or count > 50) then
+        QuestieQuest:CompleteQuest(quest)
+        QuestieJourney:CompleteQuest(questId)
+    else
+        Questie:Debug(DEBUG_INFO, "[QuestieEventHandler]", questId, ":Quest not complete starting timer! IsQuestFlaggedCompleted", IsQuestFlaggedCompleted(questId), "Repeatable:", quest.Repeatable, "Count:", count);
+        C_Timer.After(0.1, function()
+            CompleteQuest(questId, count + 1)
+        end);
+    end
 end
 
 -- Fires when a quest is turned in, but before it is remove from the quest log.
@@ -72,13 +147,19 @@ function QuestieEventHandler:QUEST_TURNED_IN(questID, xpReward, moneyReward)
     Questie:Debug(DEBUG_DEVELOP, "EVENT: QUEST_TURNED_IN", questID, xpReward, moneyReward)
     _Hack_prime_log()
     finishedEventReceived = questID
+
+    -- Some repeatable sub quests don't fire a UQLC event when they're completed.
+    -- Therefore we have to check here to make sure the next QLU updates the state.
+    local quest = QuestieDB:GetQuest(questID)
+    if quest and quest.parentQuest and quest.Repeatable then
+        runQLU = true
+    end
 end
 
 -- Fires when the quest log changes. That includes visual changes and
 -- client/server communication, so not every event really updates the log data.
 function QuestieEventHandler:QUEST_LOG_UPDATE()
     Questie:Debug(DEBUG_DEVELOP, "QUEST_LOG_UPDATE")
-    hasFirstQLU = true
     if playerEntered then
         Questie:Debug(DEBUG_DEVELOP, "---> Player entered world, START.")
         C_Timer.After(1, function ()
@@ -86,13 +167,17 @@ function QuestieEventHandler:QUEST_LOG_UPDATE()
             QuestieQuest:GetAllQuestIds()
             QuestieTracker:Initialize()
             QuestieTracker:Update()
+            -- Initialize Questie Comms
+            if(QuestieComms) then
+                QuestieComms:Initialize();
+            end
         end)
         playerEntered = nil;
     end
 
     -- QR or UQLC events have set the flag, so we need to update Questie state.
     if runQLU then
-        QuestieQuest:CompareQuestHashes()
+        QuestieHash:CompareQuestHashes()
         runQLU = false
     end
 end
@@ -137,7 +222,12 @@ end
 -- Fired when some chat messages about skills are displayed
 function QuestieEventHandler:CHAT_MSG_SKILL()
     Questie:Debug(DEBUG_DEVELOP, "CHAT_MSG_SKILL")
-    QuestieProfessions:Update()
+    local isProfUpdate = QuestieProfessions:Update()
+    -- This needs to be done to draw new quests that just came available
+    if isProfUpdate then
+        QuestieQuest:CalculateAvailableQuests()
+        QuestieQuest:DrawAllAvailableQuests()
+    end
 end
 
 -- Fired when some chat messages about reputations are displayed
@@ -158,6 +248,33 @@ function QuestieEventHandler:GROUP_ROSTER_UPDATE()
         -- We do however always want the local to be the current number to allow up and down.
         numOfMembers = currentMembers;
     end
+end
+
+function QuestieEventHandler:GROUP_JOINED()
+    Questie:Debug(DEBUG_DEVELOP, "GROUP_JOINED")
+    local checkTimer = nil;
+    --We want this to be fairly quick.
+    checkTimer = C_Timer.NewTicker(0.1, function()
+        local partyPending = UnitInParty("player");
+        local inParty = UnitInParty("party1");
+        local inRaid = UnitInRaid("raid1");
+        if(partyPending) then
+            if(inParty or inRaid) then
+                Questie:Debug(DEBUG_DEVELOP, "[QuestieEventHandler]", "Player joined party/raid, ask for questlogs");
+                --Request other players log.
+                Questie:SendMessage("QC_ID_REQUEST_FULL_QUESTLIST");
+                checkTimer:Cancel();
+            end
+        else
+            Questie:Debug(DEBUG_DEVELOP, "[QuestieEventHandler]", "Player no longer in a party or pending invite. Cancel timer");
+            checkTimer:Cancel();
+        end
+    end)
+end
+
+function QuestieEventHandler:GROUP_LEFT()
+    --Resets both QuestieComms.remoteQuestLog and QuestieComms.data
+    QuestieComms:ResetAll();
 end
 
 

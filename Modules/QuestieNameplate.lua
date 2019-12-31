@@ -1,4 +1,10 @@
-QuestieNameplate = {};
+---@class QuestieNameplate
+local QuestieNameplate = QuestieLoader:CreateModule("QuestieNameplate");
+-------------------------
+--Import modules.
+-------------------------
+---@type QuestieTooltips
+local QuestieTooltips = QuestieLoader:ImportModule("QuestieTooltips");
 
 local activeGUIDs = {};
 local npFrames = {};
@@ -101,7 +107,7 @@ function QuestieNameplate:NameplateCreated(token)
     local unitType, zero, server_id, instance_id, zone_uid, npc_id, spawn_uid = strsplit("-", unitGUID);
 
     if unitType == "Creature" then
-        local icon = _GetValidIcon(QuestieTooltips.tooltipLookup["u_" .. npc_id]);
+        local icon = _GetValidIcon(QuestieTooltips.tooltipLookup["m_" .. npc_id]);
 
         if icon then
             activeGUIDs[unitGUID] = token;
@@ -135,7 +141,7 @@ function QuestieNameplate:UpdateNameplate(self)
 
         if not unitName or not npc_id then return end
 
-        local icon = _GetValidIcon(QuestieTooltips.tooltipLookup["u_" .. npc_id]);
+        local icon = _GetValidIcon(QuestieTooltips.tooltipLookup["m_" .. npc_id]);
 
         if icon then
             local frame = QuestieNameplate:GetFrame(guid);
@@ -154,10 +160,10 @@ function QuestieNameplate:UpdateNameplate(self)
 end
 
 function QuestieNameplate:HideCurrentFrames()
-        for guid, token in pairs(activeGUIDs) do
-            activeGUIDs[guid] = nil;
-            QuestieNameplate:RemoveFrame(guid);
-        end
+    for guid, token in pairs(activeGUIDs) do
+        activeGUIDs[guid] = nil;
+        QuestieNameplate:RemoveFrame(guid);
+    end
 end
 
 
@@ -180,7 +186,7 @@ function QuestieNameplate:DrawTargetFrame()
 
             if unitType == "Creature" then
 
-                local icon = _GetValidIcon(QuestieTooltips.tooltipLookup["u_" .. npc_id]);
+                local icon = _GetValidIcon(QuestieTooltips.tooltipLookup["m_" .. npc_id]);
 
                 if icon then
 
